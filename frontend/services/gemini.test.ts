@@ -77,4 +77,15 @@ describe('generateItinerary', () => {
 
     await expect(generateItinerary(mockRequest)).rejects.toThrow('API Error');
   });
+
+  it('throws an error when response is malformed JSON', async () => {
+    const mockResponse = {
+      text: '{ "incomplete": json ',
+    };
+    const { GoogleGenAI: MockedAI } = await import('@google/genai');
+    const aiInstance = new MockedAI({ apiKey: 'test' });
+    (aiInstance.models.generateContent as any).mockResolvedValue(mockResponse);
+
+    await expect(generateItinerary(mockRequest)).rejects.toThrow();
+  });
 });

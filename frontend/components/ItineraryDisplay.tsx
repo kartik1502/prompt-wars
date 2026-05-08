@@ -125,6 +125,7 @@ RecommendationCard.displayName = 'RecommendationCard';
 export const ItineraryDisplay: React.FC<ItineraryDisplayProps> = React.memo(({ itinerary, onRefine, isRefining }) => {
   const [refineText, setRefineText] = useState('');
   const [activeMapQuery, setActiveMapQuery] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const handleRefineSubmit = useCallback((e: React.FormEvent) => {
     e.preventDefault();
@@ -138,6 +139,33 @@ export const ItineraryDisplay: React.FC<ItineraryDisplayProps> = React.memo(({ i
     setActiveMapQuery(query);
   }, []);
 
+  const handleSaveTrip = async () => {
+    setIsSaving(true);
+    try {
+      const response = await fetch('/api/save-itinerary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          itinerary,
+          metadata: { 
+            clientTimestamp: new Date().toISOString(),
+            userAgent: navigator.userAgent
+          }
+        }),
+      });
+      
+      if (!response.ok) throw new Error('Failed to save');
+      
+      const data = await response.json();
+      alert(`Trip saved! ID: ${data.id}`);
+    } catch (err) {
+      console.error('Save error:', err);
+      alert('Failed to save trip to Google Cloud.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
     <div className="flex flex-col relative">
       <div className="pb-24 space-y-8">
@@ -148,11 +176,16 @@ export const ItineraryDisplay: React.FC<ItineraryDisplayProps> = React.memo(({ i
               <p className="text-slate-600 dark:text-slate-300 leading-relaxed">{itinerary.summary}</p>
             </div>
             <button 
-              className="flex items-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors font-medium text-sm"
-              onClick={() => alert("Itinerary saved to Google Cloud! (Demo)")}
+              className="flex items-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors font-medium text-sm disabled:opacity-50"
+              onClick={handleSaveTrip}
+              disabled={isSaving}
             >
-              <Save className="w-4 h-4" />
-              Save Trip
+              {isSaving ? (
+                <div className="animate-spin rounded-full h-4 w-4 border-2 border-slate-500 border-t-transparent" />
+              ) : (
+                <Save className="w-4 h-4" />
+              )}
+              {isSaving ? 'Saving...' : 'Save Trip'}
             </button>
           </div>
         </div>

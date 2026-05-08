@@ -12,12 +12,30 @@ import rateLimit from 'express-rate-limit';
 import { WebSocketServer, WebSocket } from 'ws';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { Firestore } from '@google-cloud/firestore';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Initialize Firestore
+const db = new Firestore({
+  projectId: process?.env?.GOOGLE_CLOUD_PROJECT,
+});
+
 const app = express();
 app.use(express.json({limit: process?.env?.API_PAYLOAD_MAX_SIZE || "7mb"}));
+
+// --- Structured Logging ---
+const log = (message, severity = 'INFO', payload = {}) => {
+  const logEntry = {
+    message,
+    severity,
+    timestamp: new Date().toISOString(),
+    ...payload,
+  };
+  if (process.env.NODE_ENV === 'test') return;
+  console.log(JSON.stringify(logEntry));
+};
 
 const PORT = process?.env?.PORT || process?.env?.API_BACKEND_PORT || 5000;
 const API_BACKEND_HOST = process.env.NODE_ENV === 'production' ? '0.0.0.0' : (process?.env?.API_BACKEND_HOST || "127.0.0.1");
@@ -51,6 +69,31 @@ const proxyLimiter = rateLimit({
 });
 // Apply the rate limiter to the /api-proxy route before the main proxy logic
 app.use('/api-proxy', proxyLimiter);
+
+// --- Save Itinerary Endpoint ---
+app.post('/api/save-itinerary', async (req, res) => {
+  try {
+    const { itinerary, metadata } = req.body;
+    if (!itinerary) {
+      return res.status(400).json({ error: 'Missing itinerary data' });
+    }
+
+    const docRef = db.collection('itineraries').doc();
+    await docRef.set({
+      ...itinerary,
+      metadata: {
+        ...metadata,
+        createdAt: new Date().toISOString(),
+      }
+    });
+
+    log('Itinerary saved successfully', 'INFO', { docId: docRef.id });
+    res.status(200).json({ id: docRef.id, message: 'Itinerary saved successfully' });
+  } catch (error) {
+    log('Failed to save itinerary', 'ERROR', { error: error.message });
+    res.status(500).json({ error: 'Failed to save itinerary', details: error.message });
+  }
+});
 
 const API_CLIENT_MAP = [
  {
@@ -213,12 +256,12 @@ app.post('/api-proxy', async (req, res) => {
   });
 
   if (!apiClient) {
-    console.error(`[Node Proxy] No API client handler found for URL: ${originalUrl}`);
+    log(`No API client handler found for URL: ${originalUrl}`, 'WARN');
     return res.status(404).json({ error: `No proxy handler found for URL: ${originalUrl}` });
   }
 
   const extractedParams = req.extractedParams;
-  console.log(`[Node Proxy] Matched API client: ${apiClient.name}`);
+  log(`Matched API client: ${apiClient.name}`, 'DEBUG');
   try {
     // 2. Get authenticated access token
     const accessToken = await getAccessToken(res);
@@ -227,7 +270,7 @@ app.post('/api-proxy', async (req, res) => {
     // 3. Construct the full API URL using env-set GOOGLE_CLOUD_PROJECT/LOCATION and extracted params
     const context = {projectId: GOOGLE_CLOUD_PROJECT, region: GOOGLE_CLOUD_LOCATION};
     const apiUrl = apiClient.getApiEndpoint(context, extractedParams);
-    console.log(`[Node Proxy] Forwarding to Vertex API: ${apiUrl}`);
+    log(`Forwarding to Vertex API: ${apiUrl}`, 'DEBUG');
 
     // 4. Prepare headers for the API call
     const apiHeaders = getRequestHeaders(accessToken);
@@ -243,7 +286,7 @@ app.post('/api-proxy', async (req, res) => {
 
     // 6. Respond to the client based on stream type
     if (apiClient.isStreaming) {
-      console.log(`[Node Proxy] Sending STREAMING response for ${apiClient.name}`);
+      log(`Sending STREAMING response for ${apiClient.name}`, 'INFO');
       // Set headers for a streaming JSON response
       res.writeHead(apiResponse.status, {
         'Content-Type': 'text/event-stream',
@@ -254,7 +297,7 @@ app.post('/api-proxy', async (req, res) => {
       res.flushHeaders();
 
       if (!apiResponse.body) {
-        console.error('[Node Proxy] Streaming response has no body.');
+        log('Streaming response has no body', 'ERROR');
         return res.end(JSON.stringify({ error: 'Streaming response body is null' }));
       }
 
@@ -277,26 +320,25 @@ app.post('/api-proxy', async (req, res) => {
             }
           }
         } catch (error) {
-          console.error(`[Node Proxy] Error processing streaming response for ${apiClient.name}`);
-          console.error(error);
+          log(`Error processing streaming response for ${apiClient.name}`, 'ERROR', { error: error.message });
         }
       });
 
       apiResponse.body.on('end', () => {
         deltaChunk = '';
-        console.log(`[Node Proxy] Vertex stream finished and all data processed for ${apiClient.name}`);
+        log(`Vertex stream finished for ${apiClient.name}`, 'DEBUG');
         res.end();
       });
 
       apiResponse.body.on('error', (streamError) => {
-        console.error('[Node Proxy] Error from Vertex stream:', streamError);
+        log('Error from Vertex stream', 'ERROR', { error: streamError.message });
         if (!res.writableEnded) {
           res.end(JSON.stringify({ proxyError: 'Stream error from Vertex AI', details: streamError.message }));
         }
       });
 
       res.on('error', (resError) => {
-        console.error('[Node Proxy] Error writing to client response:', resError);
+        log('Error writing to client response', 'ERROR', { error: resError.message });
         // The source stream might need to be destroyed if an error occurs here.
         if (apiResponse.body && typeof apiResponse.body.destroy === 'function') {
              apiResponse.body.destroy(resError);
@@ -304,14 +346,13 @@ app.post('/api-proxy', async (req, res) => {
       });
     } else {
       // Non-streaming response handling
-      console.log(`[Node Proxy] Sending JSON response for ${apiClient.name}`);
+      log(`Sending JSON response for ${apiClient.name}`, 'INFO');
       const data = await apiResponse.json();
       res.status(apiResponse.status).json(data);
     }
   } catch (error) {
-    console.error(`[Node Proxy] Error proxying request for ${apiClient.name}`);
-    console.error(error)
-    res.status(500).json({ error: error });
+    log(`Error proxying request for ${apiClient.name}`, 'ERROR', { error: error.message });
+    res.status(500).json({ error: { message: error.message } });
   }
 });
 
