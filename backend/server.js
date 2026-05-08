@@ -24,12 +24,12 @@ const API_BACKEND_HOST = process.env.NODE_ENV === 'production' ? '0.0.0.0' : (pr
 
 const GOOGLE_CLOUD_LOCATION = process?.env?.GOOGLE_CLOUD_LOCATION;
 const GOOGLE_CLOUD_PROJECT = process?.env?.GOOGLE_CLOUD_PROJECT;
-if (!GOOGLE_CLOUD_PROJECT || !GOOGLE_CLOUD_LOCATION) {
+if ((!GOOGLE_CLOUD_PROJECT || !GOOGLE_CLOUD_LOCATION) && process.env.NODE_ENV !== 'test') {
   console.error("Error: Environment variables GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION must be set.");
   process.exit(1);
 }
 const PROXY_HEADER = process?.env?.PROXY_HEADER;
-if (!PROXY_HEADER) {
+if (!PROXY_HEADER && process.env.NODE_ENV !== 'test') {
   console.error("Error: Environment variables PROXY_HEADER must be set.");
   process.exit(1);
 }
@@ -318,15 +318,18 @@ app.post('/api-proxy', async (req, res) => {
 if (process.env.NODE_ENV === 'production') {
   const staticPath = path.join(__dirname, '../frontend/dist');
   app.use(express.static(staticPath));
-  app.get('*', (req, res) => {
+  app.use((req, res) => {
     res.sendFile(path.join(staticPath, 'index.html'));
   });
 }
 
-const server = app.listen(PORT, API_BACKEND_HOST, () => {
-  console.log(`Vertex AI Backend listening at http://${API_BACKEND_HOST}:${PORT}`);
+export const server = app.listen(PORT, API_BACKEND_HOST, () => {
+  if (process.env.NODE_ENV !== 'test') {
+    console.log(`Vertex AI Backend listening at http://${API_BACKEND_HOST}:${PORT}`);
+  }
 });
 
+export { app };
 
 const wss = new WebSocketServer({ noServer: true });
 

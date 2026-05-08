@@ -118,6 +118,11 @@ export async function generateItinerary(
         responseMimeType: 'application/json',
         responseSchema: itinerarySchema,
         temperature: 0.7,
+        tools: [
+          {
+            googleSearch: {}
+          }
+        ]
       }
     });
 
